@@ -1,21 +1,18 @@
-# app.py — LawGPT RAG Chatbot (Ollama + FAISS)
-# ---------------------------------------------
-# A local generative AI legal chatbot using the Indian Penal Code data.
+# app.py — LawGPT RAG Chatbot + Document Summarizer (Ollama + FAISS)
+# -------------------------------------------------------------------
+# A local generative AI legal chatbot and document summarizer using the Indian Penal Code data.
 
 import os
 import time
+import tempfile
 import streamlit as st
 from langchain_community.vectorstores import FAISS
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.llms import Ollama
 from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
-
-# ---------------------------------------------------
-# 🧩 macOS Fix — OpenMP Runtime Conflict
-# ---------------------------------------------------
-# Prevents libomp.dylib crash on macOS
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+from langchain_community.document_loaders import PyPDFLoader
 
 # ---------------------------------------------------
 # 🎨 Streamlit Page Setup
@@ -67,7 +64,7 @@ if "memory" not in st.session_state:
 # ---------------------------------------------------
 # 🔎 Load Embeddings and FAISS Database
 # ---------------------------------------------------
-st.sidebar.subheader("📚 Database & Model Status")
+st.sidebar.subheader("📚 IPC Database Status")
 
 try:
     embeddings = OllamaEmbeddings(model="llama3")
@@ -99,9 +96,9 @@ prompt = PromptTemplate(
 )
 
 # ---------------------------------------------------
-# 🧩 LLM and RAG Chain Setup
+# 🧠 LLM and RAG Chain Setup
 # ---------------------------------------------------
-llm = OllamaLLM(model="llama3")
+llm = Ollama(model="llama3")
 
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm=llm,
@@ -114,21 +111,64 @@ qa_chain = ConversationalRetrievalChain.from_llm(
 # 💬 Streamlit Chat UI
 # ---------------------------------------------------
 st.title("⚖️ LawGPT — Your Legal AI Assistant")
-st.caption("Ask questions related to the Indian Penal Code and get AI-powered insights.")
+st.caption("Ask questions related to the Indian Penal Code or upload documents to summarize them.")
 
+# File uploader on main screen
+uploaded_files = st.file_uploader(
+    "📄 Upload PDF or TXT files to summarize (optional)",
+    type=["pdf", "txt"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    st.info("🧠 Summarizing your uploaded documents... please wait.")
+    summaries = []
+    for uploaded_file in uploaded_files:
+        if uploaded_file.name.endswith(".pdf"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                tmp_file.write(uploaded_file.read())
+                tmp_path = tmp_file.name
+
+            loader = PyPDFLoader(tmp_path)
+            pages = loader.load()
+            text = " ".join([p.page_content for p in pages])
+            os.remove(tmp_path)
+        else:
+            text = uploaded_file.read().decode("utf-8")
+
+        summarize_prompt = f"""
+        You are a helpful AI assistant that summarizes documents into simple, plain English.
+        Summarize the key points of this document clearly and concisely.
+        Document:
+        {text[:6000]}
+        """
+
+        try:
+            summary = llm.invoke(summarize_prompt)
+            summaries.append(f"**📘 {uploaded_file.name} Summary:**\n\n{summary.strip()}")
+        except Exception as e:
+            summaries.append(f"⚠️ Error summarizing {uploaded_file.name}: {e}")
+
+    st.success("✅ Summaries generated successfully!")
+    for summary in summaries:
+        st.markdown(summary)
+    st.divider()
+
+# Show previous chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
+# Chat input area
 user_query = st.chat_input("Ask your legal question here...")
 
 if user_query:
-    # Display User Message
+    # Display user message
     with st.chat_message("user"):
         st.write(user_query)
     st.session_state.messages.append({"role": "user", "content": user_query})
 
-    # Generate Assistant Response
+    # Generate assistant response
     with st.chat_message("assistant"):
         with st.status("Thinking 💡...", expanded=True):
             try:
